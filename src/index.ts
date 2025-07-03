@@ -4,16 +4,16 @@ export default {
     if (!authHeader || !authHeader.startsWith("Basic ")) {
       return new Response("Unauthorized", { status: 401 });
     }
-    const encodedCredentials = authHeader.split(" ")[1];
-    const decodedCredentials = atob(encodedCredentials);
-    const [username, password] = decodedCredentials.split(":");
-    const expectedPassword = await env.KV.get("USER_" + username);
-    if (expectedPassword == null || expectedPassword !== password) {
+    try {
+      const encodedCredentials = authHeader.split(" ")[1];
+      const decodedCredentials = atob(encodedCredentials);
+      const [username, password] = decodedCredentials.split(":");
+      const expectedPassword = await env.KV.get("USER_" + username);
+      if (expectedPassword == null || expectedPassword !== password) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+    } catch (e) {
       return new Response("Unauthorized", { status: 401 });
-    }
-
-    if (!env.BUCKET) {
-      return new Response('R2 bucket "BUCKET" not bound.', { status: 500 });
     }
 
     const key = new URL(request.url).pathname.slice(1);
@@ -67,11 +67,14 @@ export default {
     }
   },
 
-  async scheduled(controller, env, ctx) {
+  scheduled: async function (controller, env, ctx) {
+    /**
+     * 1) Delete expired objects
+     */
     const keys = await env.KV.list({ prefix: "LAST_USED_" });
     const now = Date.now();
-    // 1 week in milliseconds
-    const expirationTime = 7 * 24 * 60 * 60 * 1000;
+    const expirationTime = parseInt(env.EXPIRE_AFTER_ACCESS);
+    const remainingKeys: string[] = [];
 
     for (const { name } of keys.keys) {
       const lastUsedString = await env.KV.get(name);
@@ -83,7 +86,48 @@ export default {
       if (isNaN(lastUsed) || now - lastUsed > expirationTime) {
         await env.BUCKET.delete(name.replace("LAST_USED_", ""));
         await env.KV.delete(name);
+      } else {
+        remainingKeys.push(name);
       }
+    }
+
+    /**
+     * 2) Enforce maximum cache size
+     */
+    const maxSizeBytes = parseInt(env.MAX_CACHE_SIZE);
+    if (maxSizeBytes <= 0) {
+      // Max size disabled
+      return;
+    }
+
+    let totalSize = 0;
+    const sizeMap: Record<string, number> = {};
+    const objects = await env.BUCKET.list();
+    for (const object of objects.objects) {
+      totalSize += object.size;
+      sizeMap[object.key] = object.size;
+    }
+
+    if (totalSize <= maxSizeBytes) {
+      return;
+    }
+
+    const remainingMap = await env.KV.get(remainingKeys);
+    const remainingAccessed: [string, number][] = [];
+    for (const [key, value] of Object.entries(remainingMap)) {
+      remainingAccessed.push([key.replace("LAST_USED_", ""), parseInt(value, 10)]);
+    }
+
+    remainingAccessed.sort((a, b) => a[1] - b[1]);
+    while (totalSize > maxSizeBytes && remainingAccessed.length > 0) {
+      const [key, lastUsed] = remainingAccessed.shift()!;
+      const size = sizeMap[key];
+      if (size === undefined) {
+        continue;
+      }
+      await env.BUCKET.delete(key);
+      await env.KV.delete("LAST_USED_" + key);
+      totalSize -= size;
     }
   },
 } satisfies ExportedHandler<Env>;
