@@ -24,12 +24,14 @@
 	 */
 	"r2_buckets": [
 		{
-			"binding": "BUCKET"
+			"binding": "BUCKET",
+			"bucket_name": "gradle-build-cache"
 		}
 	],
 	"kv_namespaces": [
 		{
-			"binding": "KV"
+			"binding": "KV",
+			"id": "9cdc5957c5794dcbb914fab37e8b4afa"
 		}
 	],
 
