@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "gradle-build-cache-worker",
+	"name": "gradle-build-cache",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-07-03",
 	"observability": {
